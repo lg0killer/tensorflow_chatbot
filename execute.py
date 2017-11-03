@@ -30,15 +30,6 @@ import tensorflow as tf
 import data_utils
 import seq2seq_model
 
-# python2 and python3 support
-try:
-    reload
-except NameError:
-    # py3k has unicode by default
-    pass
-else:
-    reload(sys).setdefaultencoding('utf-8')
-    
 try:
     from ConfigParser import SafeConfigParser
 except:
@@ -49,34 +40,15 @@ gConfig = {}
 def get_config(config_file='seq2seq.ini'):
     parser = SafeConfigParser()
     parser.read(config_file)
-    # get the ints, floats and strings
-    _conf_ints = [ (key, int(value)) for key,value in parser.items('ints') ]
-    _conf_floats = [ (key, float(value)) for key,value in parser.items('floats') ]
-    _conf_strings = [ (key, str(value)) for key,value in parser.items('strings') ]
-    return dict(_conf_ints + _conf_floats + _conf_strings)
 
-# We use a number of buckets and pad to the closest one for efficiency.
-# See seq2seq_model.Seq2SeqModel for details of how they work.
+    conf_ints = [ (key, int(value)) for key,value in parser.items('ints') ]
+    conf_floats = [ (key, float(value)) for key,value in parser.items('floats') ]
+    conf_strings = [ (key, str(value)) for key,value in parser.items('strings') ]
+    return dict(conf_ints + conf_floats + conf_strings)
+
 _buckets = [(5, 10), (10, 15), (20, 25), (40, 50)]
 
-
 def read_data(source_path, target_path, max_size=None):
-  """Read data from source and target files and put into buckets.
-
-  Args:
-    source_path: path to the files with token-ids for the source language.
-    target_path: path to the file with token-ids for the target language;
-      it must be aligned with the source file: n-th line contains the desired
-      output for n-th line from the source_path.
-    max_size: maximum number of lines to read, all other will be ignored;
-      if 0 or None, data files will be read completely (no limit).
-
-  Returns:
-    data_set: a list of length len(_buckets); data_set[n] contains a list of
-      (source, target) pairs read from the provided data files that fit
-      into the n-th bucket, i.e., such that len(source) < _buckets[n][0] and
-      len(target) < _buckets[n][1]; source and target are lists of token-ids.
-  """
   data_set = [[] for _ in _buckets]
   with tf.gfile.GFile(source_path, mode="r") as source_file:
     with tf.gfile.GFile(target_path, mode="r") as target_file:
@@ -102,13 +74,13 @@ def create_model(session, forward_only):
 
   """Create model and initialize or load parameters"""
   model = seq2seq_model.Seq2SeqModel( gConfig['enc_vocab_size'], gConfig['dec_vocab_size'], _buckets, gConfig['layer_size'], gConfig['num_layers'], gConfig['max_gradient_norm'], gConfig['batch_size'], gConfig['learning_rate'], gConfig['learning_rate_decay_factor'], forward_only=forward_only)
-
   if 'pretrained_model' in gConfig:
+      print("Restoring pretrained model")
       model.saver.restore(session,gConfig['pretrained_model'])
       return model
 
   ckpt = tf.train.get_checkpoint_state(gConfig['working_directory'])
-  # the checkpoint filename has changed in recent versions of tensorflow
+
   checkpoint_suffix = ""
   if tf.__version__ > "0.12":
       checkpoint_suffix = ".index"
@@ -120,14 +92,11 @@ def create_model(session, forward_only):
     session.run(tf.initialize_all_variables())
   return model
 
-
 def train():
   # prepare dataset
   print("Preparing data in %s" % gConfig['working_directory'])
   enc_train, dec_train, enc_dev, dec_dev, _, _ = data_utils.prepare_custom_data(gConfig['working_directory'],gConfig['train_enc'],gConfig['train_dec'],gConfig['test_enc'],gConfig['test_dec'],gConfig['enc_vocab_size'],gConfig['dec_vocab_size'])
-
-  # Only allocate 2/3 of the gpu memory to allow for running gpu-based predictions while training:
-  gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.666)
+  gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.8)
   config = tf.ConfigProto(gpu_options=gpu_options)
   config.gpu_options.allocator_type = 'BFC'
 
@@ -144,9 +113,6 @@ def train():
     train_bucket_sizes = [len(train_set[b]) for b in xrange(len(_buckets))]
     train_total_size = float(sum(train_bucket_sizes))
 
-    # A bucket scale is a list of increasing numbers from 0 to 1 that we'll use
-    # to select a bucket. Length of [scale[i], scale[i+1]] is proportional to
-    # the size if i-th training bucket, as used later.
     train_buckets_scale = [sum(train_bucket_sizes[:i + 1]) / train_total_size
                            for i in xrange(len(train_bucket_sizes))]
 
@@ -212,8 +178,8 @@ def decode():
     model.batch_size = 1  # We decode one sentence at a time.
 
     # Load vocabularies.
-    enc_vocab_path = os.path.join(gConfig['working_directory'],"vocab%d.enc" % gConfig['enc_vocab_size'])
-    dec_vocab_path = os.path.join(gConfig['working_directory'],"vocab%d.dec" % gConfig['dec_vocab_size'])
+    enc_vocab_path = os.path.join(gConfig['working_directory'],"vocab%d.enc.txt" % gConfig['enc_vocab_size'])
+    dec_vocab_path = os.path.join(gConfig['working_directory'],"vocab%d.dec.txt" % gConfig['dec_vocab_size'])
 
     enc_vocab, _ = data_utils.initialize_vocabulary(enc_vocab_path)
     _, rev_dec_vocab = data_utils.initialize_vocabulary(dec_vocab_path)
@@ -225,6 +191,7 @@ def decode():
     while sentence:
       # Get token-ids for the input sentence.
       token_ids = data_utils.sentence_to_token_ids(tf.compat.as_bytes(sentence), enc_vocab)
+
       # Which bucket does it belong to?
       bucket_id = min([b for b in xrange(len(_buckets))
                        if _buckets[b][0] > len(token_ids)])
@@ -236,9 +203,13 @@ def decode():
                                        target_weights, bucket_id, True)
       # This is a greedy decoder - outputs are just argmaxes of output_logits.
       outputs = [int(np.argmax(logit, axis=1)) for logit in output_logits]
+
       # If there is an EOS symbol in outputs, cut them at that point.
       if data_utils.EOS_ID in outputs:
         outputs = outputs[:outputs.index(data_utils.EOS_ID)]
+
+      print(outputs)
+
       # Print out French sentence corresponding to outputs.
       print(" ".join([tf.compat.as_str(rev_dec_vocab[output]) for output in outputs]))
       print("> ", end="")
@@ -269,14 +240,14 @@ def self_test():
 def init_session(sess, conf='seq2seq.ini'):
     global gConfig
     gConfig = get_config(conf)
- 
     # Create model and load parameters.
+    print("creating model or loading parameters")
     model = create_model(sess, True)
     model.batch_size = 1  # We decode one sentence at a time.
 
     # Load vocabularies.
-    enc_vocab_path = os.path.join(gConfig['working_directory'],"vocab%d.enc" % gConfig['enc_vocab_size'])
-    dec_vocab_path = os.path.join(gConfig['working_directory'],"vocab%d.dec" % gConfig['dec_vocab_size'])
+    enc_vocab_path = os.path.join(gConfig['working_directory'],"vocab%d.enc.txt" % gConfig['enc_vocab_size'])
+    dec_vocab_path = os.path.join(gConfig['working_directory'],"vocab%d.dec.txt" % gConfig['dec_vocab_size'])
 
     enc_vocab, _ = data_utils.initialize_vocabulary(enc_vocab_path)
     _, rev_dec_vocab = data_utils.initialize_vocabulary(dec_vocab_path)

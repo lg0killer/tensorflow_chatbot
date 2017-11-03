@@ -47,7 +47,10 @@ def basic_tokenizer(sentence):
   """Very basic tokenizer: split the sentence into a list of tokens."""
   words = []
   for space_separated_fragment in sentence.strip().split():
-    words.extend(re.split(_WORD_SPLIT, space_separated_fragment))
+    try:
+      words.extend(re.split(_WORD_SPLIT, str.encode(space_separated_fragment)))
+    except:
+      words.extend(re.split(_WORD_SPLIT, space_separated_fragment))
   return [w for w in words if w]
 
 
@@ -59,6 +62,11 @@ def create_vocabulary(vocabulary_path, data_path, max_vocabulary_size,
     vocab = {}
     with gfile.GFile(data_path, mode="rb") as f:
       counter = 0
+      if gfile.Exists("phoenix/datasets/chatbotdata"):
+          print("Data Path Exists")
+      else:
+          print("Data Path not Exists")
+
       for line in f:
         counter += 1
         if counter % 100000 == 0:
@@ -106,14 +114,13 @@ def sentence_to_token_ids(sentence, vocabulary, tokenizer=None, normalize_digits
 
 def data_to_token_ids(data_path, target_path, vocabulary_path,
                       tokenizer=None, normalize_digits=True):
-
   if not gfile.Exists(target_path):
     print("Tokenizing data in %s" % data_path)
     vocab, _ = initialize_vocabulary(vocabulary_path)
     with gfile.GFile(data_path, mode="rb") as data_file:
       with gfile.GFile(target_path, mode="w") as tokens_file:
         counter = 0
-        for line in data_file:
+        for line in open(data_path,'r'):
           counter += 1
           if counter % 100000 == 0:
             print("  tokenizing line %d" % counter)
@@ -124,10 +131,10 @@ def data_to_token_ids(data_path, target_path, vocabulary_path,
 
 
 def prepare_custom_data(working_directory, train_enc, train_dec, test_enc, test_dec, enc_vocabulary_size, dec_vocabulary_size, tokenizer=None):
-
+    print("Start preparing custom data")
     # Create vocabularies of the appropriate sizes.
-    enc_vocab_path = os.path.join(working_directory, "vocab%d.enc" % enc_vocabulary_size)
-    dec_vocab_path = os.path.join(working_directory, "vocab%d.dec" % dec_vocabulary_size)
+    enc_vocab_path = os.path.join(working_directory, "vocab%d.enc.txt" % enc_vocabulary_size)
+    dec_vocab_path = os.path.join(working_directory, "vocab%d.dec.txt" % dec_vocabulary_size)
     create_vocabulary(enc_vocab_path, train_enc, enc_vocabulary_size, tokenizer)
     create_vocabulary(dec_vocab_path, train_dec, dec_vocabulary_size, tokenizer)
 
@@ -136,11 +143,13 @@ def prepare_custom_data(working_directory, train_enc, train_dec, test_enc, test_
     dec_train_ids_path = train_dec + (".ids%d" % dec_vocabulary_size)
     data_to_token_ids(train_enc, enc_train_ids_path, enc_vocab_path, tokenizer)
     data_to_token_ids(train_dec, dec_train_ids_path, dec_vocab_path, tokenizer)
-
+    print("Done tokenizing training data")
+    
     # Create token ids for the development data.
     enc_dev_ids_path = test_enc + (".ids%d" % enc_vocabulary_size)
     dec_dev_ids_path = test_dec + (".ids%d" % dec_vocabulary_size)
     data_to_token_ids(test_enc, enc_dev_ids_path, enc_vocab_path, tokenizer)
     data_to_token_ids(test_dec, dec_dev_ids_path, dec_vocab_path, tokenizer)
+    print("Done tokenizing testing data")
 
     return (enc_train_ids_path, dec_train_ids_path, enc_dev_ids_path, dec_dev_ids_path, enc_vocab_path, dec_vocab_path)
