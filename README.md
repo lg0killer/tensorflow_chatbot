@@ -13,6 +13,7 @@ Dependencies
 * scipy 
 * six
 * tensorflow (https://www.tensorflow.org/versions/r0.12/get_started/os_setup.html)
+ * make sure you use python 3.5 and install using python -m pip install --upgrade https://storage.googleapis.com/tensorflow/windows/gpu/tensorflow_gpu-0.12.1-cp35-cp35m-win_amd64.whl
 
 Use [pip](https://pypi.python.org/pypi/pip) to install any missing dependencies
 
